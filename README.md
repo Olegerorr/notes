@@ -714,6 +714,14 @@ const HEADERS = {
   "Content-Type": "application/json"
 };
 
+const API_KEY = SUPABASE_KEY; // compatibility alias
+const BIN_TEXT_URL = TABLE_TEXT;
+const BIN_IMAGES_URL = TABLE_IMAGES;
+const BIN_STATUS_URL = TABLE_STATUS;
+const BIN_BANS_URL = TABLE_BANS;
+const BIN_CHATS_URL = TABLE_CHATS;
+const BIN_ID_BANS = 'supabase';
+
 
 /* ========== EMOJI DATA ========== */
 const EMOJIS = {
@@ -811,20 +819,17 @@ async function hashPasswordHex(password) {
   return hashArray.map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
-/* ========== USERS BIN FUNCTIONS ========== */
+/* ========== USERS FUNCTIONS (SUPABASE) ========== */
 // ПОЛУЧИТЬ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ
 async function getUsersRecord() {
   try {
-    const r = await fetch(
-      `${SUPABASE_URL}/rest/v1/users?select=*`,
-      { headers: HEADERS }
-    );
-
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_USERS}?select=*`, { headers: HEADERS });
     if (!r.ok) throw new Error("GET users failed");
-    return await r.json(); // массив пользователей
+    const users = await r.json();
+    return { users: Array.isArray(users) ? users : [] };
   } catch (err) {
     console.error("Get users error:", err);
-    return [];
+    return { users: [] };
   }
 }
 
@@ -870,20 +875,10 @@ async function updateUserInBin(username, updates) {
 
 async function addUserToBin(userObj) {
   try {
-    const rec = await getUsersRecord();
-    if (!Array.isArray(rec.users)) rec.users = [];
-    
-    // Генерируем уникальный ID
-    const userId = generateUserId();
-    userObj.id = userId;
-    userObj.createdAt = Date.now();
-    
-    rec.users.push(userObj);
-    await putUsersRecord(rec);
-    return true;
-  } catch (e) { 
-    console.error(e); 
-    return false; 
+    return await addUser(userObj);
+  } catch (e) {
+    console.error(e);
+    return false;
   }
 }
 
@@ -891,90 +886,54 @@ function generateUserId() {
   return 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
 }
 
+
+async function fetchRows(table, query = 'select=*') {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, { headers: HEADERS });
+  if (!r.ok) throw new Error(`Fetch ${table} failed: ${r.status}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data : [];
+}
+
+async function insertRow(table, row) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: { ...HEADERS, Prefer: 'return=representation' },
+    body: JSON.stringify(row)
+  });
+  if (!r.ok) throw new Error(`Insert ${table} failed: ${r.status}`);
+  const data = await r.json();
+  return Array.isArray(data) ? data[0] : null;
+}
+
 /* ========== CHAT SYSTEM FUNCTIONS ========== */
 async function loadChatsFromBin() {
   try {
-    const response = await fetch(BIN_CHATS_URL + "/latest", {
-      headers: { "X-Master-Key": API_KEY }
-    });
-    
-    if (!response.ok) {
-      // If bin doesn't exist or is empty, create default
-      if (response.status === 404) {
-        await createDefaultChats();
-        return await loadChatsFromBin();
-      }
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const data = await response.json();
-    chats = Array.isArray(data.record?.chats) ? data.record.chats : [];
-    
-    // If no chats, create default
+    const rows = await fetchRows(TABLE_CHATS, 'select=*');
+    chats = rows;
     if (chats.length === 0) {
       await createDefaultChats();
-      chats = [{
-        id: 'general',
-        name: 'Общий чат',
-        description: 'Основной чат для всех пользователей',
-        type: 'public',
-        createdBy: 'system',
-        createdAt: Date.now(),
-        members: [],
-        messageCount: 0,
-        settings: {
-          allowImages: true,
-          maxMessageLength: 1000,
-          allowLinks: true,
-          allowEmojis: true
-        }
-      }];
+      chats = await fetchRows(TABLE_CHATS, 'select=*');
     }
-    
     return chats;
   } catch (error) {
     console.error('Error loading chats:', error);
-    // Return default chat structure
-    return [{
-      id: 'general',
-      name: 'Общий чат',
-      type: 'public',
-      createdBy: 'system',
-      members: [],
-      messageCount: 0
-    }];
+    return [{ id: 'general', name: 'Общий чат', type: 'public', createdBy: 'system', members: [], messageCount: 0 }];
   }
 }
 
 async function createDefaultChats() {
   try {
-    const defaultChats = {
-      chats: [
-        {
-          id: 'general',
-          name: 'Общий чат',
-          description: 'Основной чат для всех пользователей',
-          type: 'public',
-          createdBy: 'system',
-          createdAt: Date.now(),
-          members: [],
-          messageCount: 0,
-          settings: {
-            allowImages: true,
-            maxMessageLength: 1000,
-            allowLinks: true,
-            allowEmojis: true
-          }
-        }
-      ]
-    };
-    
-    await fetch(BIN_CHATS_URL, {
-      method: 'PUT',
-      headers: HEADERS,
-      body: JSON.stringify(defaultChats)
+    await insertRow(TABLE_CHATS, {
+      id: 'general',
+      name: 'Общий чат',
+      description: 'Основной чат для всех пользователей',
+      type: 'public',
+      createdBy: 'system',
+      createdAt: Date.now(),
+      members: [],
+      messageCount: 0,
+      settings: { allowImages: true, maxMessageLength: 1000, allowLinks: true, allowEmojis: true }
     });
-    
     return true;
   } catch (error) {
     console.error('Error creating default chats:', error);
@@ -984,14 +943,6 @@ async function createDefaultChats() {
 
 async function saveChatsToBin() {
   try {
-    const chatData = { chats };
-    const response = await fetch(BIN_CHATS_URL, {
-      method: 'PUT',
-      headers: HEADERS,
-      body: JSON.stringify(chatData)
-    });
-    
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return true;
   } catch (error) {
     console.error('Error saving chats:', error);
@@ -1173,22 +1124,13 @@ async function incrementChatMessageCount(chatId) {
 /* ========== BAN FUNCTIONS ========== */
 async function checkBanUser(username) {
   try {
-    if (!BIN_ID_BANS || BIN_ID_BANS === "YOUR_BANS_BIN_ID_HERE") return false;
-    const r = await fetch(BIN_BANS_URL + "/latest", { headers: { "X-Master-Key": API_KEY } });
-    if (!r.ok) return false;
-    const data = await r.json();
-    const list = data.record?.Bans;
-    if (!Array.isArray(list)) return false;
-    const userBans = list.filter(b => b.name === username);
-    if (userBans.length === 0) return false;
-    const ban = userBans[userBans.length - 1];
+    const list = await fetchRows(TABLE_BANS, `select=*&name=eq.${encodeURIComponent(username)}`);
+    if (!Array.isArray(list) || list.length === 0) return false;
+    const ban = list[list.length - 1];
     const bannedAt = Number(ban.bannedAt) || Date.now();
     const days = Number(ban.days) || 0;
     const until = bannedAt + days * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    if (days > 0 && until > now) {
-      return { banned: true, days: days, bannedAt: bannedAt, until: until };
-    }
+    if (days > 0 && until > Date.now()) return { banned: true, days, bannedAt, until };
     return false;
   } catch (e) { console.error('checkBanUser error', e); return false; }
 }
@@ -1211,10 +1153,9 @@ banExitBtn.addEventListener('click', () => {
 /* ========== MAINTENANCE CHECK ========== */
 async function checkMaintenance() {
   try {
-    const r = await fetch(BIN_STATUS_URL + "/latest", { headers: { "X-Master-Key": API_KEY } });
-    if (!r.ok) throw new Error("status bin fetch failed");
-    const data = await r.json();
-    return Boolean(data.record?.maintenance);
+    const rows = await fetchRows(TABLE_STATUS, 'select=*');
+    const latest = rows[rows.length - 1];
+    return Boolean(latest?.maintenance);
   } catch (err) {
     console.error("checkMaintenance error:", err);
     return false;
@@ -1697,36 +1638,26 @@ function fileToBase64(file) {
 }
 
 async function getBinLatest(url) {
-  try {
-    const r = await fetch(url + "/latest", { headers: { "X-Master-Key": API_KEY } });
-    if (!r.ok) throw new Error("GET bin failed");
-    const data = await r.json();
-    return data.record;
-  } catch (err) {
-    try {
-      const defaultRecord = (url === BIN_IMAGES_URL) ? { images: [] } : { messages: [] };
-      await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json", "X-Master-Key": API_KEY }, body: JSON.stringify(defaultRecord) });
-      return defaultRecord;
-    } catch (e) { throw err; }
+  if (url === BIN_TEXT_URL) {
+    return { messages: await fetchRows(TABLE_TEXT, 'select=*') };
   }
+  if (url === BIN_IMAGES_URL) {
+    return { images: await fetchRows(TABLE_IMAGES, 'select=base64').then(rows => rows.map(r => r.base64)) };
+  }
+  return {};
 }
 
 async function pushImageToBin(base64) {
   try {
-    const record = await getBinLatest(BIN_IMAGES_URL);
-    if (!Array.isArray(record.images)) record.images = [];
-    record.images.push(base64);
-    await fetch(BIN_IMAGES_URL, { method: "PUT", headers: { "Content-Type": "application/json", "X-Master-Key": API_KEY }, body: JSON.stringify(record) });
-    return record.images.length - 1;
+    const row = await insertRow(TABLE_IMAGES, { base64, createdAt: Date.now() });
+    const all = await fetchRows(TABLE_IMAGES, 'select=id&order=id.asc');
+    return all.findIndex(r => r.id === row.id);
   } catch (err) { console.error("pushImageToBin error:", err); return null; }
 }
 
 async function pushMessageToBin(msg) {
   try {
-    const record = await getBinLatest(BIN_TEXT_URL);
-    if (!Array.isArray(record.messages)) record.messages = [];
-    record.messages.push(msg);
-    await fetch(BIN_TEXT_URL, { method: "PUT", headers: { "Content-Type": "application/json", "X-Master-Key": API_KEY }, body: JSON.stringify(record) });
+    await insertRow(TABLE_TEXT, msg);
   } catch (err) { console.error("pushMessageToBin error:", err); throw err; }
 }
 
@@ -1747,7 +1678,7 @@ async function loadAllData(silent = false) {
     if (!silent) showUpdateIndicator();
   } catch (err) { 
     console.error("loadAllData error:", err); 
-    showError("Ошибка загрузки данных. Проверь API_KEY и BIN ID."); 
+    showError("Ошибка загрузки данных. Проверь доступ к Supabase."); 
   }
 }
 
